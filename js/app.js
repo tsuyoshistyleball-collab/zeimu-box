@@ -239,7 +239,12 @@ $("#pending").addEventListener("click", (e) => {
 });
 
 // ドライブへ：口座フォルダ / 第N期（なければ作る） / R8/8.csv
+let busy = false; // 保存中は自動更新（再読み込み）しない
 const saveAll = safe(async () => {
+  busy = true;
+  try { await saveAllInner(); } finally { busy = false; }
+});
+const saveAllInner = async () => {
   const acc = currentAccount();
   $("#saveAll").disabled = true;
   $("#saveAll").textContent = "保存中…";
@@ -252,7 +257,7 @@ const saveAll = safe(async () => {
     renderPending();
   }
   toast(`${acc.name} に保存しました`);
-});
+};
 
 // ---------- 確認（保存状況と合計） ----------
 const cur = currentPeriod();
@@ -417,7 +422,31 @@ window.addEventListener("beforeinstallprompt", (e) => {
 $("#installBtn").addEventListener("click", () => installEvent?.prompt());
 
 // updateViaCache:"none" … アプリ更新の確認ではブラウザの保存済みファイルを使わない
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js", { updateViaCache: "none" });
+let swReg = null;
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((r) => (swReg = r)).catch(() => {});
+}
+
+// ---------- 新しいバージョンが出たら自動で切り替える ----------
+// サーバーの version.js（ブラウザの保存を使わず毎回取りに行く）と、今のバージョンを比べる。
+// 違っていたら、サービスワーカーを更新してからページを読み込み直す。
+async function checkForUpdate() {
+  if (busy || pending.length) return; // 保存待ち・保存中のファイルがあるときは待つ
+  try {
+    const text = await (await fetch(`version.js?t=${Date.now()}`, { cache: "no-store" })).text();
+    const latest = text.match(/APP_VERSION\s*=\s*"([^"]+)"/)?.[1];
+    if (!latest || latest === window.APP_VERSION) return;
+    // 同じバージョンへの読み込み直しは1回だけ（反映が遅れたときに何度も再読み込みしないように）
+    if (sessionStorage.getItem("reloadedFor") === latest) return;
+    sessionStorage.setItem("reloadedFor", latest);
+    $("#headerVersion").textContent = `v${latest} に更新中…`;
+    await swReg?.update().catch(() => {});
+    location.reload();
+  } catch { /* オフラインなどのときは何もしない */ }
+}
+checkForUpdate();
+setInterval(checkForUpdate, 60 * 1000); // 1分ごと
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); }); // アプリを開き直したとき
 
 // Androidの「共有」→「税務ボックス」で送られてきたファイル
 async function receiveShared() {
@@ -449,6 +478,7 @@ function showDriveLinks() {
 // ---------- 起動 ----------
 // 前回の口座一覧をすぐ表示 → 通行証が有効ならドライブから最新に更新
 $("#appVersion").textContent = `バージョン ${window.APP_VERSION}`;
+$("#headerVersion").textContent = `v${window.APP_VERSION}`;
 updateAuthBtn();
 showDriveLinks();
 if (drive.hasLoggedIn()) {
