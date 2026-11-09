@@ -174,3 +174,4 @@ details.card input { margin: 12px 0 8px; }
 .acct .acct-url { display: block; font-size: 12px; color: var(--muted); }
 .acct .acct-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .topbar .ver { font-size: 11px; font-weight: 400; opacity: .75; margin-left: 4px; }
+.name-input { margin: 6px 0 0 !important; }

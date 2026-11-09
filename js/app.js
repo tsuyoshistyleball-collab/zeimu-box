@@ -66,6 +66,9 @@ async function requireLogin() {
 // 解約の印：ドライブの「見えない印（appProperties）」に closed=1 を付ける。フォルダ名は変えない。
 // もともと名前に【解約】(利用不可)が付いているフォルダも解約済みとして扱う。
 const CLOSED = /^(【解約】|\(利用不可\)|（利用不可）)/;
+// 期のフォルダ（第7期、４期以前、前期以前 など）
+const PERIOD_FOLDER = /^(第\d+期|\d+期以前|前期以前)/;
+const half = (s) => s.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0));
 const active = () => accounts.filter((a) => !a.closed);
 const currentAccount = () => accounts.find((a) => a.id === $("#accountSelect").value);
 
@@ -78,7 +81,8 @@ function applyFolderIds(ids) {
 async function resolveFolders() {
   const ids = {
     root: await drive.findFolderByPath([CFG.ROOT_FOLDER_NAME]),
-    groups: await Promise.all(CFG.ACCOUNT_GROUPS.map((g) => drive.findFolderByPath([CFG.ROOT_FOLDER_NAME, ...g.path]))),
+    // 見つからないフォルダがあっても、そのグループだけ飛ばして他は使えるようにする
+    groups: await Promise.all(CFG.ACCOUNT_GROUPS.map((g) => drive.findFolderByPath(g.path).catch((e) => { toast(e.message, true); return null; }))),
   };
   localStorage.setItem("folderIds", JSON.stringify(ids));
   applyFolderIds(ids);
@@ -88,10 +92,23 @@ async function resolveFolders() {
 async function loadAccounts() {
   await resolveFolders();
   const list = [];
+  const toAccount = (f, g, name = f.name) => ({
+    id: f.id, name, kind: g.kind, groupId: g.folderId,
+    url: propsToUrl(f.appProperties) || f.description || "", ownUrl: !!propsToUrl(f.appProperties),
+    closedMark: f.appProperties?.closed === "1",
+  });
   for (const g of CFG.ACCOUNT_GROUPS) {
-    for (const f of await drive.listChildren(g.folderId, { foldersOnly: true })) {
-      list.push({ id: f.id, name: f.name, kind: g.kind, groupId: g.folderId, url: propsToUrl(f.appProperties) || f.description || "", ownUrl: !!propsToUrl(f.appProperties), closedMark: f.appProperties?.closed === "1" });
-    }
+    if (!g.folderId) continue;
+    const folders = await drive.listChildren(g.folderId, { foldersOnly: true });
+    const subs = g.expandSubfolders
+      ? await Promise.all(folders.map(async (f) =>
+          (await drive.listChildren(f.id, { foldersOnly: true })).filter((x) => !PERIOD_FOLDER.test(half(x.name)))))
+      : [];
+    folders.forEach((f, i) => {
+      // 中が「GMO-PG振込明細書」などに分かれていれば、その1つ1つを口座として扱う（「第N期」などの期フォルダは除く）
+      if (subs[i]?.length) subs[i].forEach((x) => list.push(toAccount(x, g, `${f.name} / ${x.name}`)));
+      else list.push(toAccount(f, g));
+    });
   }
   localStorage.setItem("accounts", JSON.stringify(list));
   setAccounts(list);
@@ -179,7 +196,7 @@ dz.addEventListener("drop", (e) => {
 async function addFiles(files) {
   for (const file of files) {
     const ext = (file.name.match(/\.([a-z0-9]+)$/i)?.[1] || "csv").toLowerCase();
-    const item = { file, ext, buffer: await file.arrayBuffer() };
+    const item = { file, ext, buffer: await file.arrayBuffer(), baseName: file.name.replace(/\.[a-z0-9]+$/i, "") };
     guess(item);
     pending.push(item);
   }
@@ -197,6 +214,10 @@ function guess(item) {
     g = guessMonth(parsed, kind);
   }
   g = g || guessMonthFromName(item.file.name);
+  if (g && !g.year) { // 「08/12振込予定」のように年が無い名前 → 直近のその月とみなす
+    const now = new Date();
+    g = { month: g.month, year: g.month > now.getMonth() + 1 ? now.getFullYear() - 1 : now.getFullYear() };
+  }
   if (!g) {
     const d = new Date();
     d.setMonth(d.getMonth() - 1);
@@ -207,16 +228,24 @@ function guess(item) {
 
 const ymOf = (item) => item.ym.split("-").map(Number); // [年, 月]
 
+// 保存するファイル名：銀行・カードは「R8/8.csv」、売上振込は元の名前（編集可）のまま
+function saveNameOf(item, acc) {
+  const [y, m] = ymOf(item);
+  return acc?.group.keepFileName ? `${item.baseName.trim() || "明細"}.${item.ext}` : fileNameFor(y, m, item.ext);
+}
+
 function renderPending() {
   if (!pending.length) return ($("#pending").innerHTML = "");
   $("#pending").innerHTML = `<div class="card">` +
     pending.map((it, i) => {
       const [y, m] = ymOf(it);
+      const acc = currentAccount();
       return `<div class="file" data-i="${i}">
         <div class="file-head"><span>${esc(it.file.name)}</span><button class="icon" data-act="remove">✕</button></div>
+        ${acc?.group.keepFileName ? `<input type="text" class="name-input" value="${esc(it.baseName)}" data-act="name" placeholder="ファイル名" />` : ""}
         <div class="row">
           <input type="month" value="${it.ym}" data-act="month" />
-          <span class="muted">→ ${periodName(periodOf(y, m))} / ${esc(fileNameFor(y, m, it.ext))}${it.count != null ? `（${it.count}件）` : ""}</span>
+          <span class="muted"><span class="dest-name">→ ${acc?.group.keepFileName ? "" : periodName(periodOf(y, m)) + " / "}${esc(saveNameOf(it, acc))}</span>${it.count != null ? `（${it.count}件）` : ""}</span>
         </div>
       </div>`;
     }).join("") +
@@ -232,6 +261,13 @@ $("#pending").addEventListener("change", (e) => {
     renderPending();
   }
 });
+$("#pending").addEventListener("input", (e) => {
+  if (e.target.dataset.act !== "name") return;
+  const row = e.target.closest(".file");
+  const it = pending[row.dataset.i];
+  it.baseName = e.target.value;
+  row.querySelector(".dest-name").textContent = `→ ${saveNameOf(it, currentAccount())}`;
+});
 $("#pending").addEventListener("click", (e) => {
   if (e.target.dataset.act !== "remove") return;
   pending.splice(e.target.closest(".file").dataset.i, 1);
@@ -239,6 +275,7 @@ $("#pending").addEventListener("click", (e) => {
 });
 
 // ドライブへ：口座フォルダ / 第N期（なければ作る） / R8/8.csv
+// 売上振込は、口座フォルダの中に「第N期」フォルダがあればそこへ、なければ口座フォルダに直接（元の名前で）
 let busy = false; // 保存中は自動更新（再読み込み）しない
 const saveAll = safe(async () => {
   busy = true;
@@ -251,8 +288,11 @@ const saveAllInner = async () => {
   while (pending.length) {
     const it = pending[0];
     const [y, m] = ymOf(it);
-    const folder = await drive.findOrCreateFolder(acc.id, periodName(periodOf(y, m)));
-    await drive.uploadFile(folder, fileNameFor(y, m, it.ext), new Blob([it.buffer], { type: it.file.type || "text/csv" }));
+    const folder = (await usesPeriodFolders(acc))
+      ? await drive.findOrCreateFolder(acc.id, periodName(periodOf(y, m)))
+      : acc.id;
+    await drive.uploadFile(folder, saveNameOf(it, acc), new Blob([it.buffer], { type: it.file.type || "text/csv" }),
+      { month: `${y}-${m}` }); // 何月分かを見えない印で覚えておく（名前に月が無いファイルでも確認画面に出せる）
     pending.shift();
     renderPending();
   }
@@ -265,13 +305,35 @@ for (let n = cur; n >= Math.max(1, cur - 5); n--) {
   $("#period").insertAdjacentHTML("beforeend", `<option value="${n}">${periodLabel(n)}</option>`);
 }
 
-// 口座の「第N期」フォルダ内のファイル（「第３期＿済」のような名前にも対応）
+// ファイルが何月分か：保存時に付けた見えない印 → なければファイル名から
+function monthOfFile(f, months) {
+  const mark = f.appProperties?.month?.match(/^(\d{4})-(\d{1,2})$/);
+  if (mark) return { year: Number(mark[1]), month: Number(mark[2]) };
+  const g = guessMonthFromName(f.name);
+  if (g && !g.year) g.year = months.find((m) => m.month === g.month)?.year; // 「08/12振込予定」→ その期の8月
+  return g;
+}
+
+// 「第N期」フォルダを使う口座か（銀行・カードはいつも使う。売上振込は中に「第N期」があるときだけ）
+async function usesPeriodFolders(acc) {
+  if (!acc.group.keepFileName) return true;
+  return (await drive.listChildren(acc.id, { foldersOnly: true })).some((f) => /^第\d+期/.test(half(f.name)));
+}
+
+// 口座の、その期のファイル（「第３期＿済」のような名前にも対応）。
+// 期のフォルダが無い口座（Amazonなど）は、口座フォルダ直下のファイルから、その期の月のものを選ぶ。
 async function filesInPeriod(acc, n) {
-  const half = (s) => s.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0));
   const folder = (await drive.listChildren(acc.id, { foldersOnly: true }))
     .find((f) => new RegExp(`^${periodName(n)}(?!\\d)`).test(half(f.name)));
-  if (!folder) return { folderId: null, files: [] };
-  return { folderId: folder.id, files: (await drive.listChildren(folder.id)).filter((f) => !f.mimeType.includes("folder")) };
+  if (folder) return { folderId: folder.id, files: (await drive.listChildren(folder.id)).filter((f) => !f.mimeType.includes("folder")) };
+  if (!acc.group.keepFileName) return { folderId: null, files: [] };
+  const months = monthsOfPeriod(n);
+  const files = (await drive.listChildren(acc.id)).filter((f) => {
+    if (f.mimeType.includes("folder")) return false;
+    const g = monthOfFile(f, months);
+    return g?.year && months.some((m) => m.year === g.year && m.month === g.month);
+  });
+  return { folderId: null, files };
 }
 
 let allTx = [];
@@ -288,8 +350,8 @@ $("#checkBtn").addEventListener("click", safe(async () => {
     const saved = new Map(); // "2026-8" → ファイルのURL
     const { folderId, files } = await filesInPeriod(acc, n);
     for (const f of files) {
-      const fm = guessMonthFromName(f.name);
-      if (fm) saved.set(`${fm.year}-${fm.month}`, f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`);
+      const fm = monthOfFile(f, months);
+      if (fm?.year) saved.set(`${fm.year}-${fm.month}`, f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`);
       if (/csv|text/.test(f.mimeType) || /\.csv$/i.test(f.name)) {
         const tx = parseStatement(await drive.downloadFile(f.id), acc.kind).transactions;
         allTx.push(...tx.map((t) => ({ ...t, account: acc.name })));
@@ -358,7 +420,9 @@ $("#addForm").addEventListener("submit", safe(async (e) => {
   if (url && !isUrl(url)) return toast("URLは https:// から入れてください", true);
   if (url.length > URL_PARTS * 100) return toast("URLが長すぎます（500文字まで）", true);
   await requireLogin();
-  await drive.createFolder(CFG.ACCOUNT_GROUPS[$("#newKind").value].folderId, name, url ? urlToProps(url) : {});
+  const group = CFG.ACCOUNT_GROUPS[$("#newKind").value];
+  if (!group.folderId) return toast(`「${group.path.join(" / ")}」フォルダが見つからないため追加できません`, true);
+  await drive.createFolder(group.folderId, name, url ? urlToProps(url) : {});
   e.target.reset();
   await loadAccounts();
   toast(`「${name}」を追加しました`);
@@ -471,7 +535,7 @@ function showDriveLinks() {
     return;
   }
   $("#driveLink").href = folderUrl(CFG.ROOT_FOLDER_ID);
-  $("#driveLinks").innerHTML = [{ label: "明細フォルダ（全体）", folderId: CFG.ROOT_FOLDER_ID }, ...CFG.ACCOUNT_GROUPS]
+  $("#driveLinks").innerHTML = [{ label: "明細フォルダ（全体）", folderId: CFG.ROOT_FOLDER_ID }, ...CFG.ACCOUNT_GROUPS.filter((g) => g.folderId)]
     .map((g) => `<div>${extLink(folderUrl(g.folderId), "📁 " + esc(g.label))}</div>`).join("");
 }
 

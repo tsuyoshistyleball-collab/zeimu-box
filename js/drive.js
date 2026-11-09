@@ -160,7 +160,8 @@ export async function findOrCreateFolder(parentId, name) {
 }
 
 // ファイルをアップロード（同じ名前があれば上書き＝新しい版として保存）
-export async function uploadFile(parentId, name, blob) {
+// appProperties … ファイルに付ける見えない印（例：{ month: "2026-08" } ＝ 何月分の明細か）
+export async function uploadFile(parentId, name, blob, appProperties = {}) {
   const params = new URLSearchParams({
     q: `'${parentId}' in parents and name = '${q(name)}' and trashed = false`,
     fields: "files(id)",
@@ -169,7 +170,7 @@ export async function uploadFile(parentId, name, blob) {
   });
   const existing = (await (await api(`${API}/files?${params}`)).json()).files[0];
 
-  const metadata = existing ? { name } : { name, parents: [parentId] };
+  const metadata = existing ? { name, appProperties } : { name, appProperties, parents: [parentId] };
   const form = new FormData();
   form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
   form.append("file", blob);

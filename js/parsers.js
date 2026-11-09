@@ -144,11 +144,19 @@ export function guessMonth(parsed, kind) {
   return { year: y, month: m };
 }
 
-// ファイル名から月を推測（例：「R8/8.csv」「202608.csv」「2026-08」）
+// ファイル名から月を推測
+//  「R8/8.csv」→ 2026年8月　「2025/10/13 - 2025/10/20.pdf」→ 2025年10月
+//  「202608.csv」→ 2026年8月　「08/12振込予定」→ 8月（年は不明なので year: null）
 export function guessMonthFromName(name) {
-  let m = name.match(/R(\d{1,2})[\/_\-年.](\d{1,2})/i);
-  if (m) return { year: 2018 + Number(m[1]), month: Number(m[2]) };
-  m = name.match(/(20\d{2})[\/_\-年.]?(\d{2})/);
-  if (m && Number(m[2]) >= 1 && Number(m[2]) <= 12) return { year: Number(m[1]), month: Number(m[2]) };
+  name = name.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0));
+  const ok = (m) => m >= 1 && m <= 12;
+  let m = name.match(/R(\d{1,2})[\/_\-年.](\d{1,2})(?!\d)/i);
+  if (m && ok(+m[2])) return { year: 2018 + Number(m[1]), month: Number(m[2]) };
+  m = name.match(/(20\d{2})[\/_\-年.](\d{1,2})(?!\d)/);
+  if (m && ok(+m[2])) return { year: Number(m[1]), month: Number(m[2]) };
+  m = name.match(/(20\d{2})(\d{2})/);
+  if (m && ok(+m[2])) return { year: Number(m[1]), month: Number(m[2]) };
+  m = name.match(/^(\d{1,2})[\/月](\d{1,2})/);
+  if (m && ok(+m[1])) return { year: null, month: Number(m[1]) };
   return null;
 }
