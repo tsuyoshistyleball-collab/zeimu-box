@@ -90,7 +90,7 @@ async function loadAccounts() {
   const list = [];
   for (const g of CFG.ACCOUNT_GROUPS) {
     for (const f of await drive.listChildren(g.folderId, { foldersOnly: true })) {
-      list.push({ id: f.id, name: f.name, kind: g.kind, groupId: g.folderId, url: f.description || "", closedMark: f.appProperties?.closed === "1" });
+      list.push({ id: f.id, name: f.name, kind: g.kind, groupId: g.folderId, url: propsToUrl(f.appProperties) || f.description || "", ownUrl: !!propsToUrl(f.appProperties), closedMark: f.appProperties?.closed === "1" });
     }
   }
   localStorage.setItem("accounts", JSON.stringify(list));
@@ -122,6 +122,21 @@ function showAccounts() {
 }
 
 // 明細ページのURL：フォルダの説明欄 → なければ config.js の LOGIN_LINKS
+// 明細ページのURLは、フォルダの見えない印（appProperties）に保存する。
+// 印1つに入る文字数が少ないので、100文字ずつ url0〜url4 に分けて入れる（最大500文字）。
+const URL_PARTS = 5;
+function urlToProps(url) {
+  const props = {};
+  for (let i = 0; i < URL_PARTS; i++) props["url" + i] = url.slice(i * 100, (i + 1) * 100) || null;
+  return props;
+}
+function propsToUrl(props = {}) {
+  let url = "";
+  for (let i = 0; i < URL_PARTS; i++) url += props["url" + i] || "";
+  return url;
+}
+const isUrl = (s) => /^https?:\/\/\S+$/.test(s);
+
 function linkFor(acc) {
   if (/^https?:\/\//.test(acc.url)) return acc.url;
   const key = Object.keys(CFG.LOGIN_LINKS).find((k) => acc.name.includes(k));
@@ -335,9 +350,10 @@ $("#addForm").addEventListener("submit", safe(async (e) => {
   e.preventDefault();
   const name = $("#newName").value.trim();
   const url = $("#newUrl").value.trim();
-  if (url && !/^https?:\/\//.test(url)) return toast("URLは https:// から入れてください", true);
+  if (url && !isUrl(url)) return toast("URLは https:// から入れてください", true);
+  if (url.length > URL_PARTS * 100) return toast("URLが長すぎます（500文字まで）", true);
   await requireLogin();
-  await drive.createFolder(CFG.ACCOUNT_GROUPS[$("#newKind").value].folderId, name, url);
+  await drive.createFolder(CFG.ACCOUNT_GROUPS[$("#newKind").value].folderId, name, url ? urlToProps(url) : {});
   e.target.reset();
   await loadAccounts();
   toast(`「${name}」を追加しました`);
@@ -350,18 +366,32 @@ function renderAccountList() {
   const list = accounts.filter((a) => show || !a.closed);
   $("#accountList").innerHTML = list.map((a) => `
     <div class="acct ${a.closed ? "closed" : ""}" data-id="${a.id}">
-      <span>${esc(a.name)}</span>
-      ${a.closedByName ? `<small>名前で解約済み</small>`
-        : `<button class="btn small ghost" data-act="${a.closed ? "reopen" : "close"}">${a.closed ? "戻す" : "解約"}</button>`}
+      <div>
+        <span>${esc(a.name)}</span>
+        <small class="acct-url">${linkFor(a) ? `<a href="${esc(linkFor(a))}" target="_blank" rel="noopener">明細ページ</a>${a.ownUrl ? "" : "（自動）"}` : "URL未設定"}</small>
+      </div>
+      <div class="acct-actions">
+        <button class="btn small ghost" data-act="url">URL</button>
+        ${a.closedByName ? `<small>名前で解約済み</small>`
+          : `<button class="btn small ghost" data-act="${a.closed ? "reopen" : "close"}">${a.closed ? "戻す" : "解約"}</button>`}
+      </div>
     </div>`).join("");
 }
 
-// 解約＝フォルダ名に【解約】を付けるだけ（保存済みの明細は消えない）
+// URL＝明細ページのURLを編集／解約・戻す＝見えない印を付け外し（フォルダ名や明細はそのまま）
 $("#accountList").addEventListener("click", safe(async (e) => {
   const acc = accounts.find((a) => a.id === e.target.closest(".acct")?.dataset.id);
   const act = e.target.dataset.act;
   if (!acc || !act) return;
-  if (act === "close") {
+  if (act === "url") {
+    const url = prompt(`「${acc.name}」の明細ページのURL\n（空にすると自動のURLに戻ります）`, acc.ownUrl ? acc.url : linkFor(acc));
+    if (url === null) return; // キャンセル
+    const v = url.trim();
+    if (v && !isUrl(v)) return toast("URLは https:// から入れてください", true);
+    if (v.length > URL_PARTS * 100) return toast("URLが長すぎます（500文字まで）", true);
+    await drive.updateMetadata(acc.id, { appProperties: urlToProps(v) });
+    toast(v ? "URLを保存しました" : "自動のURLに戻しました");
+  } else if (act === "close") {
     if (!confirm(`「${acc.name}」を解約済みにしますか？（明細は消えません）`)) return;
     await drive.updateMetadata(acc.id, { appProperties: { closed: "1" } });
   } else {

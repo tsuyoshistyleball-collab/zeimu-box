@@ -181,12 +181,12 @@ export async function uploadFile(parentId, name, blob) {
   return { ...(await res.json()), replaced: !!existing };
 }
 
-// 新しいフォルダを作る（口座・カードの追加用）。description にメモ（明細ページのURLなど）を保存できる
-export async function createFolder(parentId, name, description = "") {
-  const res = await api(`${API}/files?supportsAllDrives=true&fields=id,name,description`, {
+// 新しいフォルダを作る（口座・カードの追加用）。appProperties（見えない印）も一緒に付けられる
+export async function createFolder(parentId, name, appProperties = {}) {
+  const res = await api(`${API}/files?supportsAllDrives=true&fields=id,name`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, description, mimeType: FOLDER_MIME, parents: [parentId] }),
+    body: JSON.stringify({ name, appProperties, mimeType: FOLDER_MIME, parents: [parentId] }),
   });
   return await res.json();
 }
