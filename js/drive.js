@@ -111,7 +111,7 @@ export async function listChildren(folderId, { foldersOnly = false } = {}) {
   do {
     const params = new URLSearchParams({
       q: query,
-      fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size, webViewLink, description)",
+      fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size, webViewLink, description, appProperties)",
       pageSize: "200",
       orderBy: "name",
       supportsAllDrives: "true",
@@ -191,7 +191,7 @@ export async function createFolder(parentId, name, description = "") {
   return await res.json();
 }
 
-// ファイル・フォルダの名前や説明を変える
+// ファイル・フォルダの情報を変える（このアプリでは名前は変えず、見えない印 appProperties だけを使う）
 export async function updateMetadata(fileId, changes) {
   const res = await api(`${API}/files/${fileId}?supportsAllDrives=true&fields=id,name,description`, {
     method: "PATCH",

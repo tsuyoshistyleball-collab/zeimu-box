@@ -63,6 +63,8 @@ async function requireLogin() {
 
 // ---------- 口座・カード ----------
 // 口座 = 「仕事で使用」フォルダの中のフォルダ。解約したものは名前の先頭に【解約】。
+// 解約の印：ドライブの「見えない印（appProperties）」に closed=1 を付ける。フォルダ名は変えない。
+// もともと名前に【解約】(利用不可)が付いているフォルダも解約済みとして扱う。
 const CLOSED = /^(【解約】|\(利用不可\)|（利用不可）)/;
 const active = () => accounts.filter((a) => !a.closed);
 const currentAccount = () => accounts.find((a) => a.id === $("#accountSelect").value);
@@ -88,7 +90,7 @@ async function loadAccounts() {
   const list = [];
   for (const g of CFG.ACCOUNT_GROUPS) {
     for (const f of await drive.listChildren(g.folderId, { foldersOnly: true })) {
-      list.push({ id: f.id, name: f.name, kind: g.kind, groupId: g.folderId, url: f.description || "" });
+      list.push({ id: f.id, name: f.name, kind: g.kind, groupId: g.folderId, url: f.description || "", closedMark: f.appProperties?.closed === "1" });
     }
   }
   localStorage.setItem("accounts", JSON.stringify(list));
@@ -97,7 +99,7 @@ async function loadAccounts() {
 
 function setAccounts(list) {
   accounts = list
-    .map((a) => ({ ...a, group: CFG.ACCOUNT_GROUPS.find((g) => g.folderId === a.groupId), closed: CLOSED.test(a.name) }))
+    .map((a) => ({ ...a, group: CFG.ACCOUNT_GROUPS.find((g) => g.folderId === a.groupId), closedByName: CLOSED.test(a.name), closed: CLOSED.test(a.name) || !!a.closedMark }))
     .filter((a) => a.group);
   showAccounts();
 }
@@ -349,7 +351,8 @@ function renderAccountList() {
   $("#accountList").innerHTML = list.map((a) => `
     <div class="acct ${a.closed ? "closed" : ""}" data-id="${a.id}">
       <span>${esc(a.name)}</span>
-      <button class="btn small ghost" data-act="${a.closed ? "reopen" : "close"}">${a.closed ? "戻す" : "解約"}</button>
+      ${a.closedByName ? `<small>名前で解約済み</small>`
+        : `<button class="btn small ghost" data-act="${a.closed ? "reopen" : "close"}">${a.closed ? "戻す" : "解約"}</button>`}
     </div>`).join("");
 }
 
@@ -360,9 +363,9 @@ $("#accountList").addEventListener("click", safe(async (e) => {
   if (!acc || !act) return;
   if (act === "close") {
     if (!confirm(`「${acc.name}」を解約済みにしますか？（明細は消えません）`)) return;
-    await drive.updateMetadata(acc.id, { name: "【解約】" + acc.name });
+    await drive.updateMetadata(acc.id, { appProperties: { closed: "1" } });
   } else {
-    await drive.updateMetadata(acc.id, { name: acc.name.replace(CLOSED, "") });
+    await drive.updateMetadata(acc.id, { appProperties: { closed: null } });
   }
   await loadAccounts();
 }));
