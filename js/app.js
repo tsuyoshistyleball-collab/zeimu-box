@@ -156,8 +156,13 @@ const isUrl = (s) => /^https?:\/\/\S+$/.test(s);
 
 function linkFor(acc) {
   if (/^https?:\/\//.test(acc.url)) return acc.url;
-  const key = Object.keys(CFG.LOGIN_LINKS).find((k) => acc.name.includes(k));
-  return key ? CFG.LOGIN_LINKS[key] : "";
+  // 売上振込は専用の一覧（SALES_LINKS）を先に見る。「Amazon」がカードと売上で別のページになるため
+  const lists = acc.kind === "sales" ? [CFG.SALES_LINKS || {}, CFG.LOGIN_LINKS] : [CFG.LOGIN_LINKS];
+  for (const list of lists) {
+    const key = Object.keys(list).find((k) => acc.name.includes(k));
+    if (key) return list[key];
+  }
+  return "";
 }
 
 // Googleドライブのフォルダを開くURL

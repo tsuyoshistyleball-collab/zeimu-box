@@ -29,6 +29,11 @@ window.APP_CONFIG = {
   // {r} = 令和の年, {y} = 西暦, {m} = 月, {mm} = 2桁の月, {ext} = 拡張子
   FILE_NAME_FORMAT: "R{r}/{m}.{ext}",
 
+  // 売上振込のフォルダ名にこの文字が含まれていたら、このページを「明細ページを開く」の行き先にします。
+  SALES_LINKS: {
+    "Amazon": "https://sellercentral.amazon.co.jp/amazonsell/payments",
+  },
+
   // 口座名にこの文字が含まれていたら「明細ページを開く」リンクを出します（一般的な金融機関の一覧）。
   // 個別に設定したい場合は、口座を追加するときにURLを入れてください（ドライブ側に保存されます）。
   LOGIN_LINKS: {
