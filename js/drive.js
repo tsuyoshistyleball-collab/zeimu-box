@@ -111,7 +111,7 @@ export async function listChildren(folderId, { foldersOnly = false } = {}) {
   do {
     const params = new URLSearchParams({
       q: query,
-      fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size, webViewLink, description, appProperties)",
+      fields: "nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size, webViewLink, description, appProperties)",
       pageSize: "200",
       orderBy: "name",
       supportsAllDrives: "true",

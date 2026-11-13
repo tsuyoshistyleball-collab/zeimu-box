@@ -177,3 +177,5 @@ details.card input { margin: 12px 0 8px; }
 .name-input { margin: 6px 0 0 !important; }
 .status-row { justify-content: space-between; margin: 8px 0 0; }
 .group-head { margin: 18px 0 2px !important; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 13px !important; }
+.grid td.na { background: var(--accent-soft); color: var(--muted); }
+.grid td.toggle { cursor: pointer; user-select: none; }

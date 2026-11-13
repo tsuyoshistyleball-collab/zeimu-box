@@ -140,6 +140,7 @@ async function loadAccounts() {
     id: f.id, name, kind: g.kind, groupId: g.folderId,
     url: propsToUrl(f.appProperties) || f.description || "", ownUrl: !!propsToUrl(f.appProperties),
     closedMark: f.appProperties?.closed === "1",
+    na: naFromProps(f.appProperties), // 「明細なし」にした月
   });
   for (const g of CFG.ACCOUNT_GROUPS) {
     if (!g.folderId) continue;
@@ -357,12 +358,29 @@ for (let n = cur; n >= Math.max(1, cur - 5); n--) {
   $("#period").insertAdjacentHTML("beforeend", `<option value="${n}">${periodLabel(n)}</option>`);
 }
 
+// 「明細なし（△）」の月は、口座フォルダの見えない印に「na7 = "8,9"」（第7期の8月と9月）の形で保存する
+function naFromProps(props = {}) {
+  const na = {};
+  for (const [k, v] of Object.entries(props || {})) {
+    const m = k.match(/^na(\d+)$/);
+    if (m && v) na[m[1]] = v.split(",").map(Number);
+  }
+  return na;
+}
+
 // ファイルが何月分か：保存時に付けた見えない印 → なければファイル名から
 function monthOfFile(f, months) {
   const mark = f.appProperties?.month?.match(/^(\d{4})-(\d{1,2})$/);
   if (mark) return { year: Number(mark[1]), month: Number(mark[2]) };
   const g = guessMonthFromName(f.name);
-  if (g && !g.year) g.year = months.find((m) => m.month === g.month)?.year; // 「08/12振込予定」→ その期の8月
+  // 「01/28振込予定」のように年が無い名前は、ファイルをドライブに入れた日から年を決める。
+  // （入れた日より前で一番近いその月。振込「予定」なので1か月半先までは同じ年とみなす）
+  if (g && !g.year) {
+    const made = new Date(f.createdTime || Date.now());
+    const limit = new Date(made.getTime() + 45 * 24 * 60 * 60 * 1000);
+    g.year = new Date(made.getFullYear() + 1, g.month - 1, 1) <= limit ? made.getFullYear() + 1
+      : new Date(made.getFullYear(), g.month - 1, 1) <= limit ? made.getFullYear() : made.getFullYear() - 1;
+  }
   return g;
 }
 
@@ -389,6 +407,30 @@ async function filesInPeriod(acc, n) {
 }
 
 let allTx = [];
+
+// − ⇄ △ の切り替え（押したらすぐ表示を変え、ドライブの見えない印にも保存する）
+$("#checkResult").addEventListener("click", safe(async (e) => {
+  const td = e.target.closest("td.toggle");
+  if (!td) return;
+  const acc = accounts.find((a) => a.id === td.dataset.acc);
+  const n = $("#period").value, month = Number(td.dataset.month);
+  const list = new Set(acc.na?.[n] || []);
+  const toNa = !list.has(month);
+  toNa ? list.add(month) : list.delete(month);
+  const show = (na) => { td.textContent = na ? "△" : "−"; td.className = (na ? "na" : "missing") + " toggle"; };
+  show(toNa);
+  try {
+    await drive.updateMetadata(acc.id, { appProperties: { ["na" + n]: [...list].join(",") || null } });
+  } catch (err) {
+    show(!toNa); // 保存できなかったら表示を元に戻す
+    throw err;
+  }
+  acc.na = { ...acc.na, [n]: [...list] };
+  // 端末に覚えている一覧にも反映
+  const cache = JSON.parse(localStorage.getItem("accounts") || "[]");
+  const c = cache.find((a) => a.id === acc.id);
+  if (c) { c.na = acc.na; localStorage.setItem("accounts", JSON.stringify(cache)); }
+}));
 $("#checkBtn").addEventListener("click", safe(async () => {
   await requireLogin();
   const n = Number($("#period").value);
@@ -413,19 +455,22 @@ $("#checkBtn").addEventListener("click", safe(async () => {
   }));
   allTx.sort((a, b) => a.date - b.date);
 
-  const cell = (saved, m) => {
+  const cell = (acc, saved, m) => {
     const url = saved.get(`${m.year}-${m.month}`);
     if (url) return `<td class="ok">${extLink(url, "✓")}</td>`; // ✓を押すとそのファイルが開く
-    return new Date(m.year, m.month - 1) > now ? `<td></td>` : `<td class="missing">−</td>`;
+    if (new Date(m.year, m.month - 1) > now) return `<td></td>`;
+    // − と △ は押すと切り替わる（△＝その月は明細がそもそも無い）
+    const na = acc.na?.[n]?.includes(m.month);
+    return `<td class="${na ? "na" : "missing"} toggle" data-acc="${acc.id}" data-month="${m.month}" title="押すと − と △ を切り替え">${na ? "△" : "−"}</td>`;
   };
   $("#checkResult").innerHTML = `
     <div class="card scroll">
       <table class="grid">
         <thead><tr><th></th>${months.map((m) => `<th>${m.month}月</th>`).join("")}</tr></thead>
         <tbody>${rows.map(({ acc, saved, folderId }) =>
-          `<tr><th>${extLink(folderUrl(folderId || acc.id), esc(acc.name))}</th>${months.map((m) => cell(saved, m)).join("")}</tr>`).join("")}</tbody>
+          `<tr><th>${extLink(folderUrl(folderId || acc.id), esc(acc.name))}</th>${months.map((m) => cell(acc, saved, m)).join("")}</tr>`).join("")}</tbody>
       </table>
-      <p class="muted">✓ 保存済み　− 未保存（口座名や ✓ を押すとドライブが開きます）</p>
+      <p class="muted">✓ 保存済み　− 未保存　△ 明細なし<br><b>− を押すと △（その月は明細が無い）に変えられます。</b>もう一度押すと − に戻ります。<br>口座名や ✓ を押すとドライブが開きます。</p>
     </div>
     <div class="card">
       <div class="row">
