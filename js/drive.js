@@ -141,6 +141,21 @@ export async function findFolderByPath(names) {
   return id;
 }
 
+// フォルダに付けた見えない印（zeimuRole）でフォルダを探す。
+// 印はフォルダ自体に付くので、名前を変えても、別の場所へ移動しても見つけられる。
+export async function findFolderByTag(role) {
+  const params = new URLSearchParams({
+    q: `appProperties has { key='zeimuRole' and value='${q(role)}' } and mimeType = '${FOLDER_MIME}' and trashed = false`,
+    fields: "files(id)",
+  });
+  return (await (await api(`${API}/files?${params}`)).json()).files[0]?.id || null;
+}
+
+// IDからファイル・フォルダの情報を取る
+export async function getFile(id) {
+  return await (await api(`${API}/files/${id}?fields=id,name,mimeType,trashed&supportsAllDrives=true`)).json();
+}
+
 // 名前でフォルダを探し、なければ作る（例：「第7期」）
 export async function findOrCreateFolder(parentId, name) {
   const params = new URLSearchParams({

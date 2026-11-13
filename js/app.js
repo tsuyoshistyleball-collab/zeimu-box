@@ -82,14 +82,31 @@ function applyFolderIds(ids) {
   CFG.ACCOUNT_GROUPS.forEach((g, i) => (g.folderId = ids.groups?.[i]));
   showDriveLinks();
 }
+// フォルダの探し方：
+//  1) フォルダに付けた見えない印（zeimuRole）で探す … 名前を変えても移動しても見つかる
+//  2) 印がまだ無ければ config.js のフォルダ名で探し、見つけたら印を付ける
+//  3) どちらでも見つからなければ null（設定画面の「フォルダを指定」でリンクを貼って指定できる）
+async function locate(role, path) {
+  try {
+    let id = await drive.findFolderByTag(role);
+    if (!id) {
+      id = await drive.findFolderByPath(path);
+      await drive.updateMetadata(id, { appProperties: { zeimuRole: role } });
+    }
+    return id;
+  } catch (e) {
+    return null;
+  }
+}
 async function resolveFolders() {
   const ids = {
-    root: await drive.findFolderByPath([CFG.ROOT_FOLDER_NAME]),
-    // 見つからないフォルダがあっても、そのグループだけ飛ばして他は使えるようにする
-    groups: await Promise.all(CFG.ACCOUNT_GROUPS.map((g) => drive.findFolderByPath(g.path).catch((e) => { toast(e.message, true); return null; }))),
+    root: await locate("root", [CFG.ROOT_FOLDER_NAME]),
+    groups: await Promise.all(CFG.ACCOUNT_GROUPS.map((g) => locate(g.kind, g.path))),
   };
   localStorage.setItem("folderIds", JSON.stringify(ids));
   applyFolderIds(ids);
+  const missing = CFG.ACCOUNT_GROUPS.filter((g) => !g.folderId).map((g) => g.label);
+  if (missing.length) toast(`「${missing.join("」「")}」のフォルダが見つかりません。設定の「Googleドライブ」で指定してください`, true);
 }
 
 // ドライブから口座一覧を読み込み、端末にも覚えておく（次回すぐ表示できるように）
@@ -489,7 +506,8 @@ document.querySelectorAll(".refresh-btn").forEach((b) => b.addEventListener("cli
   if (!drive.isSignedIn()) await drive.signIn();
   updateAuthBtn();
   await loadAccounts();
-  toast("口座一覧を最新にしました");
+  // 見つからないフォルダがあるときは、その注意の通知を残す
+  if (CFG.ACCOUNT_GROUPS.every((g) => g.folderId)) toast("口座一覧を最新にしました");
 })));
 
 // URL＝明細ページのURLを編集／解約・戻す＝見えない印を付け外し（フォルダ名や明細はそのまま）
@@ -573,16 +591,38 @@ async function receiveShared() {
 }
 
 // ---------- ドライブへの直リンク ----------
-function showDriveLinks() {
-  if (!CFG.ROOT_FOLDER_ID) {
-    $("#driveLink").href = "https://drive.google.com/";
-    $("#driveLinks").textContent = "ログインすると表示されます";
-    return;
-  }
-  $("#driveLink").href = folderUrl(CFG.ROOT_FOLDER_ID);
-  $("#driveLinks").innerHTML = [{ label: "明細フォルダ（全体）", folderId: CFG.ROOT_FOLDER_ID }, ...CFG.ACCOUNT_GROUPS.filter((g) => g.folderId)]
-    .map((g) => `<div>${extLink(folderUrl(g.folderId), "📁 " + esc(g.label))}</div>`).join("");
+// 設定の「Googleドライブ」欄：各フォルダへのリンクと、フォルダを指定し直すボタン
+function folderSlots() {
+  return [{ role: "root", label: "明細フォルダ（全体）", folderId: CFG.ROOT_FOLDER_ID },
+    ...CFG.ACCOUNT_GROUPS.map((g) => ({ role: g.kind, label: g.label, folderId: g.folderId }))];
 }
+function showDriveLinks() {
+  $("#driveLink").href = CFG.ROOT_FOLDER_ID ? folderUrl(CFG.ROOT_FOLDER_ID) : "https://drive.google.com/";
+  if (!drive.hasLoggedIn()) return ($("#driveLinks").textContent = "ログインすると表示されます");
+  $("#driveLinks").innerHTML = folderSlots().map((f) => `
+    <div class="acct" data-role="${f.role}">
+      <div>${f.folderId ? extLink(folderUrl(f.folderId), "📁 " + esc(f.label)) : `<span class="warn">⚠️ ${esc(f.label)}：フォルダが見つかりません</span>`}</div>
+      <button class="btn small ghost" data-act="pick">${f.folderId ? "変更" : "フォルダを指定"}</button>
+    </div>`).join("");
+}
+
+// フォルダを指定：ドライブのフォルダのリンクを貼ってもらい、そのフォルダに印を付ける
+$("#driveLinks").addEventListener("click", safe(async (e) => {
+  if (e.target.dataset.act !== "pick") return;
+  const slot = folderSlots().find((f) => f.role === e.target.closest(".acct").dataset.role);
+  const input = prompt(`「${slot.label}」のフォルダを指定します。\nGoogleドライブでそのフォルダを開き、アドレス（URL）をコピーして貼ってください。`);
+  if (!input) return;
+  const id = input.match(/folders\/([\w-]+)/)?.[1] || input.match(/[?&]id=([\w-]+)/)?.[1] || (/^[\w-]{20,}$/.test(input.trim()) ? input.trim() : null);
+  if (!id) return toast("フォルダのリンクを読み取れませんでした（drive.google.com/drive/folders/… の形のURLを貼ってください）", true);
+  if (!drive.isSignedIn()) await drive.signIn();
+  const file = await drive.getFile(id);
+  if (!file.mimeType.includes("folder") || file.trashed) return toast("これはフォルダではありません。フォルダのリンクを貼ってください", true);
+  if (!confirm(`「${slot.label}」のフォルダを「${file.name}」にします。よろしいですか？`)) return;
+  if (slot.folderId && slot.folderId !== id) await drive.updateMetadata(slot.folderId, { appProperties: { zeimuRole: null } }).catch(() => {});
+  await drive.updateMetadata(id, { appProperties: { zeimuRole: slot.role } });
+  await loadAccounts();
+  toast(`「${slot.label}」のフォルダを「${file.name}」にしました`);
+}));
 
 // ---------- 起動 ----------
 // 前回の口座一覧をすぐ表示 → 通行証が有効ならドライブから最新に更新
