@@ -33,6 +33,7 @@ window.APP_CONFIG = {
   SALES_LINKS: {
     "Amazon": "https://sellercentral.amazon.co.jp/amazonsell/payments",
     "楽天": "https://billpay.rakuten.co.jp/settlement_result",
+    "auPAY": "https://manager.wowma.jp/wmshopclient/dpstListMenu/menu",
   },
 
   // 口座名にこの文字が含まれていたら「明細ページを開く」リンクを出します（一般的な金融機関の一覧）。
