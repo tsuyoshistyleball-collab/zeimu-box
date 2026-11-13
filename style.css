@@ -179,3 +179,117 @@ details.card input { margin: 12px 0 8px; }
 .group-head { margin: 18px 0 2px !important; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 13px !important; }
 .grid td.na { background: var(--accent-soft); color: var(--muted); }
 .grid td.toggle { cursor: pointer; user-select: none; }
+
+/* =============================================================
+   ダッシュボード
+   グラフの色は、色覚の違いがあっても見分けやすいと確認した組み合わせ（青・オレンジ）
+   ============================================================= */
+:root {
+  --series-1: #2a78d6;        /* グラフの色1（青） */
+  --series-2: #eb6834;        /* グラフの色2（オレンジ） */
+  --track: #cde2fb;           /* 進み具合の棒の「まだ」の部分（青の薄い色） */
+  --good: #0ca30c;
+  --crit: #d03b3b;
+  --shadow: 0 1px 2px rgba(16, 24, 20, .04), 0 4px 16px rgba(16, 24, 20, .05);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --series-1: #3987e5; --series-2: #d95926; --track: #184f95; --shadow: none; }
+}
+
+main { max-width: 1120px; }
+.card { box-shadow: var(--shadow); }
+.card h3 { font-size: 15px; margin: 0 0 12px; }
+.card h3 small { font-weight: 400; margin-left: 6px; }
+.card h4 { font-size: 13px; font-weight: 600; margin: 14px 0 8px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+
+.dash-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.dash-bar select { flex: 1; min-width: 180px; margin: 0; }
+#dashStatus { display: block; margin: 0 2px 12px; }
+#dash.loading { opacity: .5; pointer-events: none; transition: opacity .2s; }
+.pending-box { margin-top: 12px; }
+.empty { text-align: center; padding: 40px 16px; }
+
+/* 並べ方：スマホは縦1列、広い画面は横に並べる */
+.dgrid { display: grid; gap: 14px; margin-bottom: 14px; }
+.dgrid > .card { margin-bottom: 0; }
+.dgrid.inner { margin: 0; gap: 4px 28px; }
+@media (min-width: 760px) {
+  .dgrid { grid-template-columns: 1.1fr 1fr; }
+  .dgrid.two { grid-template-columns: 1fr 1fr; }
+}
+
+/* いちばん大きい数字（進み具合） */
+.hero { background: linear-gradient(135deg, #1f6f5c, #14503f); color: #fff; border: 0; }
+.hero .label { font-size: 13px; opacity: .85; }
+.hero-row { display: flex; align-items: center; gap: 20px; margin-top: 6px; flex-wrap: wrap; }
+.hero-num { font-size: 64px; font-weight: 700; line-height: 1; letter-spacing: -.02em; }
+.hero-num small { font-size: 24px; font-weight: 600; margin-left: 2px; opacity: .85; }
+.hero-side { flex: 1; min-width: 180px; }
+.hero .muted { color: rgba(255, 255, 255, .85); margin-top: 8px; }
+.hero .meter { background: rgba(255, 255, 255, .22); height: 10px; }
+.hero .meter i { background: #fff; }
+
+/* 数字のタイル */
+.tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.tiles.three { grid-template-columns: repeat(3, 1fr); margin-bottom: 6px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; box-shadow: var(--shadow); min-width: 0; }
+.card .tile { background: var(--bg); box-shadow: none; }
+.tile span { display: block; font-size: 12px; color: var(--muted); }
+.tile b { display: block; font-size: 26px; line-height: 1.25; }
+.tile small { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+.dot.good { background: var(--good); }
+.dot.crit { background: var(--crit); }
+@media (max-width: 420px) { .tiles.three { grid-template-columns: 1fr; } .tiles.three .tile { display: grid; grid-template-columns: 1fr auto; align-items: baseline; } .tiles.three .tile small { grid-column: 1 / -1; } }
+
+/* 横の進み具合の棒 */
+.meter { height: 8px; border-radius: 99px; background: var(--track); overflow: hidden; }
+.meter i { display: block; height: 100%; border-radius: 99px; background: var(--series-1); }
+.mrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 9px 0; border-radius: 8px; }
+.mrow .meter { grid-column: 1 / -1; grid-row: 2; }
+.mname { font-size: 14px; }
+.mval { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mval small { font-weight: 400; color: var(--muted); }
+
+/* 縦の棒グラフ */
+.chart { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; }
+.yaxis { display: flex; flex-direction: column; justify-content: space-between; height: 150px; font-size: 11px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.yaxis span { line-height: 1; transform: translateY(-50%); }
+.yaxis span:last-child { transform: translateY(50%); }
+.plot { position: relative; height: 150px; display: flex; align-items: flex-end; border-bottom: 1px solid var(--line); }
+.plot .gl { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid var(--line); }
+.col { flex: 1; height: 100%; display: flex; align-items: flex-end; justify-content: center; position: relative; outline: none; }
+.col:hover .bar, .col:focus .bar { filter: brightness(1.12); }
+.col b { position: absolute; transform: translateY(-4px); font-size: 11px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.bar { display: block; width: min(24px, 68%); border-radius: 4px 4px 0 0; min-height: 0; }
+.bar.s1 { background: var(--series-1); }
+.bar.s2 { background: var(--series-2); }
+.bar.track { height: 100%; background: var(--track); display: flex; align-items: flex-end; overflow: hidden; }
+.bar.track i { display: block; width: 100%; background: var(--series-1); }
+.bar.track.future { background: var(--line); opacity: .5; }
+.xaxis { display: flex; font-size: 11px; color: var(--muted); }
+.xaxis span { flex: 1; text-align: center; white-space: nowrap; }
+.key { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.key.s1 { background: var(--series-1); }
+.key.s2 { background: var(--series-2); }
+
+/* 横の棒グラフ（順位） */
+.hbar { display: grid; grid-template-columns: minmax(0, 38%) minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 6px 0; font-size: 13px; outline: none; }
+.hname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.htrack { height: 14px; }
+.htrack .bar { height: 100%; width: auto; max-width: 100%; border-radius: 0 4px 4px 0; }
+.hval { font-weight: 600; font-variant-numeric: tabular-nums; }
+.hbar:hover .bar, .hbar:focus .bar { filter: brightness(1.12); }
+
+/* まだ入れていない明細 */
+.todo { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.todo:last-child { border-bottom: 0; }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.chips span { font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--miss-bg); color: var(--danger); }
+.todo-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.grid tr.ghead th { background: var(--accent-soft); color: var(--accent); text-align: left; font-size: 12px; position: static; }
+
+/* グラフの吹き出し */
+.tip { position: fixed; z-index: 20; max-width: min(320px, calc(100vw - 16px)); padding: 6px 10px; border-radius: 8px; background: #1c2421; color: #fff; font-size: 12px; pointer-events: none; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
+#txList .scroll { max-height: 420px; overflow-y: auto; }

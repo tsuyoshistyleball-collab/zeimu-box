@@ -27,29 +27,29 @@
   </header>
 
   <main>
-    <!-- 保存 -->
-    <section id="tab-upload" class="tab active">
-      <div class="card">
+    <!-- ダッシュボード -->
+    <section id="tab-dash" class="tab active">
+      <div class="dash-bar">
+        <select id="period" aria-label="期"></select>
+        <button id="dashRefresh" class="btn">🔄 更新</button>
+        <button id="addOpen" class="btn ghost">＋ 明細を追加</button>
+      </div>
+      <small id="dashStatus" class="muted"></small>
+
+      <!-- 明細を追加（ふだんは閉じている） -->
+      <div class="card" id="addPanel" hidden>
+        <h3>明細を追加</h3>
         <select id="accountSelect"><option value="">ログインしてください</option></select>
-        <div class="row status-row"><small class="list-status muted"></small><button type="button" class="btn small ghost refresh-btn">🔄 最新にする</button></div>
+        <div class="row status-row"><small class="list-status muted"></small><button type="button" class="btn small ghost refresh-btn">🔄 口座一覧を最新にする</button></div>
         <div id="accountLink"></div>
         <label class="drop" id="dropZone">
           <input type="file" id="fileInput" multiple accept=".csv,.pdf,.txt,.xlsx,.xls,image/*" />
           <span>明細ファイルを選ぶ</span>
         </label>
+        <div id="pending"></div>
       </div>
-      <div id="pending"></div>
-    </section>
 
-    <!-- 確認 -->
-    <section id="tab-check" class="tab">
-      <div class="card">
-        <div class="row">
-          <select id="period"></select>
-          <button id="checkBtn" class="btn">表示</button>
-        </div>
-      </div>
-      <div id="checkResult"></div>
+      <div id="dash"></div>
     </section>
 
     <!-- 設定 -->
@@ -88,11 +88,11 @@
   </main>
 
   <nav class="tabbar">
-    <button data-tab="upload" class="active"><span>⬆️</span>保存</button>
-    <button data-tab="check"><span>✅</span>確認</button>
+    <button data-tab="dash" class="active"><span>📊</span>ダッシュボード</button>
     <button data-tab="settings"><span>⚙️</span>設定</button>
   </nav>
 
   <div id="toast" class="toast" hidden></div>
+  <div id="tip" class="tip" hidden></div>
 </body>
 </html>

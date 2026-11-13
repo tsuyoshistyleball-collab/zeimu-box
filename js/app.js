@@ -74,6 +74,8 @@ $("#authBtn").addEventListener("click", safe(async () => {
   } else {
     await drive.signIn();
     await loadAccounts();
+    updateAuthBtn();
+    await loadDash();
   }
   updateAuthBtn();
 }));
@@ -289,7 +291,7 @@ function saveNameOf(item, acc) {
 
 function renderPending() {
   if (!pending.length) return ($("#pending").innerHTML = "");
-  $("#pending").innerHTML = `<div class="card">` +
+  $("#pending").innerHTML = `<div class="pending-box">` +
     pending.map((it, i) => {
       const [y, m] = ymOf(it);
       const acc = currentAccount();
@@ -350,9 +352,10 @@ const saveAllInner = async () => {
     renderPending();
   }
   toast(`${acc.name} に保存しました`);
+  safe(loadDash)(); // ダッシュボードを最新にする
 };
 
-// ---------- 確認（保存状況と合計） ----------
+// ---------- 期の選択肢・ファイルの月の判定 ----------
 const cur = currentPeriod();
 for (let n = cur; n >= Math.max(1, cur - 5); n--) {
   $("#period").insertAdjacentHTML("beforeend", `<option value="${n}">${periodLabel(n)}</option>`);
@@ -406,83 +409,331 @@ async function filesInPeriod(acc, n) {
   return { folderId: null, files };
 }
 
-let allTx = [];
+// ---------- ダッシュボード ----------
+// データの流れ：loadDash() がドライブから集めて dash に入れる → renderDash() が画面を描く。
+// 集めた結果は端末にも覚えておき（dash_期の番号）、次に開いたときはすぐ表示する。
+let dash = null; // { n, at, rows:[{id,name,kind,folderId,saved:{"2026-8":url}}], money:{...} }
+let allTx = []; // 取引の一覧（検索用。端末には保存しない）
+const periodN = () => Number($("#period").value);
+const ymKey = (m) => `${m.year}-${m.month}`;
 
-// − ⇄ △ の切り替え（押したらすぐ表示を変え、ドライブの見えない印にも保存する）
-$("#checkResult").addEventListener("click", safe(async (e) => {
-  const td = e.target.closest("td.toggle");
-  if (!td) return;
-  const acc = accounts.find((a) => a.id === td.dataset.acc);
-  const n = $("#period").value, month = Number(td.dataset.month);
-  const list = new Set(acc.na?.[n] || []);
-  const toNa = !list.has(month);
-  toNa ? list.add(month) : list.delete(month);
-  const show = (na) => { td.textContent = na ? "△" : "−"; td.className = (na ? "na" : "missing") + " toggle"; };
-  show(toNa);
+// 金額を短く：1,234,567 → 123万 ／ 123,456,789 → 1.2億
+function compactYen(v) {
+  const a = Math.abs(v), sign = v < 0 ? "-" : "";
+  if (a >= 1e8) return `${sign}${(a / 1e8).toFixed(1)}億`;
+  if (a >= 1e4) return `${sign}${(a / 1e4).toFixed(a < 1e5 ? 1 : 0)}万`;
+  return `${sign}${Math.round(a).toLocaleString("ja-JP")}`;
+}
+// グラフの目盛りの上限を、きりのいい数にする
+function niceMax(v) {
+  if (v <= 0) return 1;
+  const pow = 10 ** Math.floor(Math.log10(v));
+  return [1, 2, 5, 10].map((m) => m * pow).find((x) => v <= x);
+}
+
+// ドライブから集める
+async function loadDash() {
+  await requireLogin();
+  const n = periodN();
+  const months = monthsOfPeriod(n);
+  const inPeriod = new Set(months.map(ymKey));
+  $("#dash").classList.add("loading"); // 前の表示を薄く残す（画面ががたつかないように）
+  $("#dashStatus").textContent = "ドライブから読み込み中…";
+  const tx = [];
+  const money = { bankIn: 0, bankOut: 0, card: 0, byMonth: {}, files: 0, txCount: 0 };
+  const payee = new Map();
+  const addMonth = (key, field, v) => {
+    if (!inPeriod.has(key)) return;
+    money.byMonth[key] = money.byMonth[key] || { bankIn: 0, bankOut: 0, card: 0 };
+    money.byMonth[key][field] += v;
+    money[field] += v;
+  };
   try {
-    await drive.updateMetadata(acc.id, { appProperties: { ["na" + n]: [...list].join(",") || null } });
+    const rows = await Promise.all(active().map(async (acc) => {
+      const saved = {};
+      const { folderId, files } = await filesInPeriod(acc, n);
+      for (const f of files) {
+        const fm = monthOfFile(f, months);
+        if (fm?.year) saved[ymKey(fm)] = f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`;
+        money.files++;
+        // お金の集計は、銀行とカードのCSVだけを読む
+        if (acc.kind === "sales" || !(/csv|text/.test(f.mimeType) || /\.csv$/i.test(f.name))) continue;
+        for (const t of parseStatement(await drive.downloadFile(f.id), acc.kind).transactions) {
+          tx.push({ ...t, account: acc.name });
+          money.txCount++;
+          const txKey = `${t.date.getFullYear()}-${t.date.getMonth() + 1}`;
+          if (acc.kind === "card") addMonth(fm?.year ? ymKey(fm) : txKey, "card", -t.amount); // カードは支払月で数える
+          else addMonth(txKey, t.amount > 0 ? "bankIn" : "bankOut", Math.abs(t.amount));
+          if (t.amount < 0 && t.desc) {
+            const p = payee.get(t.desc) || { amount: 0, count: 0 };
+            p.amount += -t.amount; p.count++;
+            payee.set(t.desc, p);
+          }
+        }
+      }
+      return { id: acc.id, name: acc.name, kind: acc.kind, folderId, saved };
+    }));
+    money.payees = [...payee].map(([name, p]) => ({ name, ...p })).sort((a, b) => b.amount - a.amount).slice(0, 8);
+    allTx = tx.sort((a, b) => a.date - b.date);
+    dash = { n, at: Date.now(), rows, money };
+    localStorage.setItem("dash_" + n, JSON.stringify(dash));
+  } finally {
+    $("#dash").classList.remove("loading");
+    renderDash();
+  }
+}
+
+// 端末に覚えている分を表示
+function showCachedDash() {
+  allTx = [];
+  try { dash = JSON.parse(localStorage.getItem("dash_" + periodN()) || "null"); } catch { dash = null; }
+  renderDash();
+}
+
+// 口座×月の状態を数える（ok＝保存済み / na＝明細なし / missing＝未保存 / future＝まだ先）
+function dashStats() {
+  const n = dash.n, months = monthsOfPeriod(n), now = new Date();
+  const due = months.filter((m) => new Date(m.year, m.month - 1) <= now);
+  const rows = dash.rows.map((r) => ({ ...r, acc: accounts.find((a) => a.id === r.id) })).filter((r) => r.acc && !r.acc.closed);
+  for (const r of rows) {
+    r.cells = months.map((m) => {
+      if (r.saved[ymKey(m)]) return "ok";
+      if (!due.includes(m)) return "future";
+      return r.acc.na?.[n]?.includes(m.month) ? "na" : "missing";
+    });
+    r.count = (s) => r.cells.filter((c) => c === s).length;
+  }
+  const sum = (list, s) => list.reduce((t, r) => t + r.count(s), 0);
+  const ratio = (list) => {
+    const ok = sum(list, "ok"), na = sum(list, "na"), missing = sum(list, "missing");
+    const total = ok + na + missing;
+    return { ok, na, missing, total, done: ok + na, pct: total ? Math.round(((ok + na) / total) * 100) : 0 };
+  };
+  const byMonth = months.map((m, i) => {
+    const c = (s) => rows.filter((r) => r.cells[i] === s).length;
+    const total = c("ok") + c("na") + c("missing");
+    return { m, future: !due.includes(m), ok: c("ok"), na: c("na"), missing: c("missing"), total, pct: total ? Math.round(((c("ok") + c("na")) / total) * 100) : 0 };
+  });
+  return { n, months, rows, all: ratio(rows), byMonth,
+    groups: CFG.ACCOUNT_GROUPS.map((g) => ({ label: g.label, ...ratio(rows.filter((r) => r.kind === g.kind)) })) };
+}
+
+// 棒グラフ（縦）。values: [{label, value, tip, muted}]。一番大きい棒だけ数字を出し、ほかは目盛りと吹き出しで読む
+function columnChart(values, { series = 1, fmt = compactYen } = {}) {
+  const max = niceMax(Math.max(...values.map((v) => v.value), 0));
+  const top = Math.max(...values.map((v) => v.value));
+  return `<div class="chart">
+    <div class="yaxis"><span>${fmt(max)}</span><span>${fmt(max / 2)}</span><span>0</span></div>
+    <div class="plot"><i class="gl" style="bottom:50%"></i><i class="gl" style="bottom:100%"></i>
+      ${values.map((v) => `<div class="col" tabindex="0" data-tip="${esc(v.tip)}">
+        ${v.value > 0 && v.value === top ? `<b style="bottom:${(v.value / max) * 100}%">${fmt(v.value)}</b>` : ""}
+        <i class="bar s${series}" style="height:${(v.value / max) * 100}%"></i></div>`).join("")}
+    </div>
+    <div></div><div class="xaxis">${values.map((v) => `<span>${esc(v.label)}</span>`).join("")}</div>
+  </div>`;
+}
+
+function renderDash() {
+  const el = $("#dash");
+  if (!dash) {
+    $("#dashStatus").textContent = "";
+    el.innerHTML = `<div class="card empty"><h2>まだデータがありません</h2>
+      <p class="muted">「🔄 更新」を押すと、Googleドライブから保存状況を読み込みます。</p></div>`;
+    return;
+  }
+  const s = dashStats(), money = dash.money, n = s.n;
+  const when = new Date(dash.at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  $("#dashStatus").textContent = `最終更新：${when}`;
+  const cell = (r, m, i) => {
+    const c = r.cells[i];
+    if (c === "ok") return `<td class="ok">${extLink(r.saved[ymKey(m)], "✓")}</td>`;
+    if (c === "future") return `<td></td>`;
+    return `<td class="${c} toggle" data-acc="${r.id}" data-month="${m.month}" title="押すと − と △ を切り替え">${c === "na" ? "△" : "−"}</td>`;
+  };
+  const todo = s.rows.filter((r) => r.count("missing")).sort((a, b) => b.count("missing") - a.count("missing"));
+  const mv = (field) => s.months.map((m) => {
+    const v = money.byMonth[ymKey(m)]?.[field] || 0;
+    return { label: `${m.month}月`, value: v, tip: `${m.year}年${m.month}月　${yen(v)}` };
+  });
+  const payMax = Math.max(...(money.payees || []).map((p) => p.amount), 1);
+
+  el.innerHTML = `
+    <div class="dgrid">
+      <div class="card hero">
+        <div class="label">${esc(periodName(n))}の明細の進み具合</div>
+        <div class="hero-row"><div class="hero-num">${s.all.pct}<small>%</small></div>
+          <div class="hero-side"><div class="meter"><i style="width:${s.all.pct}%"></i></div>
+          <div class="muted">今日までに必要な ${s.all.total} 件のうち ${s.all.done} 件が完了${s.all.missing ? `、<b>あと ${s.all.missing} 件</b>` : " 🎉"}</div></div></div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><span>未保存</span><b>${s.all.missing}</b><small><i class="dot crit"></i>これから入れる明細</small></div>
+        <div class="tile"><span>保存済み</span><b>${s.all.ok}</b><small><i class="dot good"></i>ドライブにある月</small></div>
+        <div class="tile"><span>明細なし</span><b>${s.all.na}</b><small>△ を付けた月</small></div>
+        <div class="tile"><span>口座・カード・売上</span><b>${s.rows.length}</b><small>使用中の数</small></div>
+      </div>
+    </div>
+
+    <div class="dgrid two">
+      <div class="card">
+        <h3>種類ごとの進み具合</h3>
+        ${s.groups.map((g) => `<div class="mrow" tabindex="0" data-tip="${esc(g.label)}　保存済み ${g.ok}・明細なし ${g.na}・未保存 ${g.missing}">
+          <span class="mname">${esc(g.label)}</span>
+          <div class="meter"><i style="width:${g.pct}%"></i></div>
+          <span class="mval">${g.done}/${g.total}<small>（${g.pct}%）</small></span></div>`).join("")}
+      </div>
+      <div class="card">
+        <h3>月ごとの進み具合</h3>
+        <div class="chart">
+          <div class="yaxis"><span>100%</span><span>50%</span><span>0</span></div>
+          <div class="plot"><i class="gl" style="bottom:50%"></i><i class="gl" style="bottom:100%"></i>
+            ${s.byMonth.map((b) => `<div class="col" tabindex="0" data-tip="${b.future ? `${b.m.month}月　まだ先の月` : `${b.m.month}月　${b.pct}%（保存済み ${b.ok}・明細なし ${b.na}・未保存 ${b.missing}）`}">
+              <i class="bar track ${b.future ? "future" : ""}"><i style="height:${b.future ? 0 : b.pct}%"></i></i></div>`).join("")}
+          </div>
+          <div></div><div class="xaxis">${s.byMonth.map((b) => `<span>${b.m.month}月</span>`).join("")}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>まだ入れていない明細 <small class="muted">${todo.length} 口座</small></h3>
+      ${todo.length ? todo.map((r) => `<div class="todo" data-acc="${r.id}">
+        <div><b>${esc(r.name)}</b>
+          <div class="chips">${s.months.filter((m, i) => r.cells[i] === "missing").map((m) => `<span>${m.month}月</span>`).join("")}</div></div>
+        <div class="todo-actions">
+          ${linkFor(r.acc) ? `<a class="btn small ghost" href="${esc(linkFor(r.acc))}" target="_blank" rel="noopener">明細ページ</a>` : ""}
+          <button class="btn small" data-act="add">追加</button>
+          <button class="btn small ghost" data-act="na-all" title="この口座の未保存の月をすべて「明細なし（△）」にする">明細なし</button>
+        </div></div>`).join("")
+        : `<p class="muted">未保存の明細はありません 🎉</p>`}
+    </div>
+
+    <div class="card">
+      <h3>お金の動き <small class="muted">保存したCSVから集計（${money.txCount.toLocaleString()} 件の取引）</small></h3>
+      <div class="tiles three">
+        <div class="tile"><span>銀行 入金</span><b>${compactYen(money.bankIn)}</b><small>${yen(money.bankIn)}</small></div>
+        <div class="tile"><span>銀行 出金</span><b>${compactYen(money.bankOut)}</b><small>${yen(money.bankOut)}</small></div>
+        <div class="tile"><span>カード利用</span><b>${compactYen(money.card)}</b><small>${yen(money.card)}</small></div>
+      </div>
+      <div class="dgrid two inner">
+        <div><h4><i class="key s1"></i>銀行の出金（月別）</h4>${columnChart(mv("bankOut"), { series: 1 })}</div>
+        <div><h4><i class="key s2"></i>カードの利用（支払月別）</h4>${columnChart(mv("card"), { series: 2 })}</div>
+      </div>
+      <details><summary>表で見る</summary><div class="scroll"><table class="tx">
+        <thead><tr><th>月</th><th class="num">銀行 入金</th><th class="num">銀行 出金</th><th class="num">カード利用</th></tr></thead>
+        <tbody>${s.months.map((m) => { const v = money.byMonth[ymKey(m)] || {}; return `<tr><td>${m.year}/${m.month}</td><td class="num">${yen(v.bankIn || 0)}</td><td class="num">${yen(v.bankOut || 0)}</td><td class="num">${yen(v.card || 0)}</td></tr>`; }).join("")}</tbody>
+      </table></div></details>
+    </div>
+
+    <div class="card">
+      <h3>支払・出金の多い相手 <small class="muted">上位8件</small></h3>
+      ${(money.payees || []).length ? money.payees.map((p) => `<div class="hbar" tabindex="0" data-tip="${esc(p.name)}　${yen(p.amount)}（${p.count}回）">
+        <span class="hname">${esc(p.name)}</span>
+        <div class="htrack"><i class="bar s1" style="width:${(p.amount / payMax) * 100}%"></i></div>
+        <span class="hval">${compactYen(p.amount)}</span></div>`).join("")
+        : `<p class="muted">CSVの明細を保存すると表示されます。</p>`}
+    </div>
+
+    <div class="card">
+      <h3>保存状況の一覧</h3>
+      <div class="scroll"><table class="grid">
+        <thead><tr><th></th>${s.months.map((m) => `<th>${m.month}月</th>`).join("")}</tr></thead>
+        <tbody>${CFG.ACCOUNT_GROUPS.map((g) => {
+          const list = s.rows.filter((r) => r.kind === g.kind);
+          return list.length ? `<tr class="ghead"><th colspan="13">${esc(g.label)}</th></tr>` + list.map((r) =>
+            `<tr><th>${extLink(folderUrl(r.folderId || r.id), esc(r.name))}</th>${s.months.map((m, i) => cell(r, m, i)).join("")}</tr>`).join("") : "";
+        }).join("")}</tbody>
+      </table></div>
+      <p class="muted">✓ 保存済み　− 未保存　△ 明細なし　｜　<b>− を押すと △ に変えられます</b>（もう一度押すと戻ります）。口座名や ✓ を押すとドライブが開きます。</p>
+    </div>
+
+    <div class="card">
+      <h3>取引をさがす</h3>
+      ${allTx.length ? `<div class="row"><input id="search" type="search" placeholder="お店の名前など（例：AMAZON）" />
+        <button id="exportBtn" class="btn ghost">CSV</button></div><div id="txList"></div>`
+        : `<p class="muted">「🔄 更新」を押すと、取引を検索できます。</p>`}
+    </div>`;
+  if (allTx.length) {
+    renderTx();
+    $("#search").addEventListener("input", renderTx);
+    $("#exportBtn").addEventListener("click", () => exportCsv(n));
+  }
+}
+
+// 「明細なし（△）」を保存する。months: その期で △ にする月の一覧
+async function saveNa(acc, n, monthsList) {
+  const before = acc.na;
+  acc.na = { ...acc.na, [n]: monthsList };
+  renderDash(); // 先に表示を変える
+  try {
+    await drive.updateMetadata(acc.id, { appProperties: { ["na" + n]: monthsList.join(",") || null } });
   } catch (err) {
-    show(!toNa); // 保存できなかったら表示を元に戻す
+    acc.na = before; // 保存できなかったら元に戻す
+    renderDash();
     throw err;
   }
-  acc.na = { ...acc.na, [n]: [...list] };
-  // 端末に覚えている一覧にも反映
   const cache = JSON.parse(localStorage.getItem("accounts") || "[]");
   const c = cache.find((a) => a.id === acc.id);
   if (c) { c.na = acc.na; localStorage.setItem("accounts", JSON.stringify(cache)); }
-}));
-$("#checkBtn").addEventListener("click", safe(async () => {
-  await requireLogin();
-  const n = Number($("#period").value);
-  const months = monthsOfPeriod(n);
-  const now = new Date();
-  $("#checkResult").innerHTML = `<div class="card muted">読み込み中…</div>`;
-  allTx = [];
+}
 
-  // 口座ごとに「保存済みの月」を調べ、CSVの中身は取引一覧用に読み込む
-  const rows = await Promise.all(active().map(async (acc) => {
-    const saved = new Map(); // "2026-8" → ファイルのURL
-    const { folderId, files } = await filesInPeriod(acc, n);
-    for (const f of files) {
-      const fm = monthOfFile(f, months);
-      if (fm?.year) saved.set(`${fm.year}-${fm.month}`, f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`);
-      if (/csv|text/.test(f.mimeType) || /\.csv$/i.test(f.name)) {
-        const tx = parseStatement(await drive.downloadFile(f.id), acc.kind).transactions;
-        allTx.push(...tx.map((t) => ({ ...t, account: acc.name })));
-      }
-    }
-    return { acc, saved, folderId };
-  }));
-  allTx.sort((a, b) => a.date - b.date);
-
-  const cell = (acc, saved, m) => {
-    const url = saved.get(`${m.year}-${m.month}`);
-    if (url) return `<td class="ok">${extLink(url, "✓")}</td>`; // ✓を押すとそのファイルが開く
-    if (new Date(m.year, m.month - 1) > now) return `<td></td>`;
-    // − と △ は押すと切り替わる（△＝その月は明細がそもそも無い）
-    const na = acc.na?.[n]?.includes(m.month);
-    return `<td class="${na ? "na" : "missing"} toggle" data-acc="${acc.id}" data-month="${m.month}" title="押すと − と △ を切り替え">${na ? "△" : "−"}</td>`;
-  };
-  $("#checkResult").innerHTML = `
-    <div class="card scroll">
-      <table class="grid">
-        <thead><tr><th></th>${months.map((m) => `<th>${m.month}月</th>`).join("")}</tr></thead>
-        <tbody>${rows.map(({ acc, saved, folderId }) =>
-          `<tr><th>${extLink(folderUrl(folderId || acc.id), esc(acc.name))}</th>${months.map((m) => cell(acc, saved, m)).join("")}</tr>`).join("")}</tbody>
-      </table>
-      <p class="muted">✓ 保存済み　− 未保存　△ 明細なし<br><b>− を押すと △（その月は明細が無い）に変えられます。</b>もう一度押すと − に戻ります。<br>口座名や ✓ を押すとドライブが開きます。</p>
-    </div>
-    <div class="card">
-      <div class="row">
-        <input id="search" type="search" placeholder="取引を検索（例：AMAZON）" />
-        <button id="exportBtn" class="btn ghost">CSV</button>
-      </div>
-      <div id="txList"></div>
-    </div>`;
-  renderTx();
-  $("#search").addEventListener("input", renderTx);
-  $("#exportBtn").addEventListener("click", () => exportCsv(n));
+$("#dash").addEventListener("click", safe(async (e) => {
+  const n = String(dash?.n);
+  // 表の − ⇄ △
+  const td = e.target.closest("td.toggle");
+  if (td) {
+    const acc = accounts.find((a) => a.id === td.dataset.acc);
+    const list = new Set(acc.na?.[n] || []);
+    const month = Number(td.dataset.month);
+    list.has(month) ? list.delete(month) : list.add(month);
+    return saveNa(acc, n, [...list]);
+  }
+  const act = e.target.dataset.act;
+  const acc = accounts.find((a) => a.id === e.target.closest(".todo")?.dataset.acc);
+  if (!act || !acc) return;
+  if (act === "add") openAddPanel(acc.id);
+  if (act === "na-all") {
+    const row = dashStats().rows.find((r) => r.id === acc.id);
+    const missing = monthsOfPeriod(dash.n).filter((m, i) => row.cells[i] === "missing").map((m) => m.month);
+    if (!confirm(`「${acc.name}」の未保存の月（${missing.map((m) => m + "月").join("・")}）を、すべて「明細なし（△）」にしますか？`)) return;
+    await saveNa(acc, n, [...new Set([...(acc.na?.[n] || []), ...missing])]);
+  }
 }));
+
+// 「＋ 明細を追加」の欄を開く
+function openAddPanel(accountId) {
+  $("#addPanel").hidden = false;
+  if (accountId) {
+    $("#accountSelect").value = accountId;
+    $("#accountSelect").dispatchEvent(new Event("change"));
+  }
+  $("#addPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+$("#addOpen").addEventListener("click", () => {
+  if ($("#addPanel").hidden) openAddPanel(); else $("#addPanel").hidden = true;
+});
+$("#dashRefresh").addEventListener("click", safe(loadDash));
+$("#period").addEventListener("change", () => {
+  showCachedDash();
+  if (drive.isSignedIn()) safe(loadDash)();
+});
+
+// グラフの吹き出し（マウスを乗せる・タップ・キーボードで選ぶと出る）
+const tip = $("#tip");
+function showTip(target) {
+  tip.textContent = target.dataset.tip; // textContent なので、名前に記号が入っていても安全
+  tip.hidden = false;
+  const r = target.getBoundingClientRect();
+  const x = Math.min(Math.max(8, r.left + r.width / 2 - tip.offsetWidth / 2), innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + "px";
+  tip.style.top = Math.max(8, r.top - tip.offsetHeight - 8) + "px";
+}
+for (const ev of ["pointerover", "focusin"]) {
+  document.addEventListener(ev, (e) => {
+    const t = e.target.closest?.("[data-tip]");
+    if (t) showTip(t); else tip.hidden = true;
+  });
+}
+document.addEventListener("scroll", () => (tip.hidden = true), { passive: true });
 
 function filteredTx() {
   const w = ($("#search")?.value || "").trim().toLowerCase();
@@ -656,7 +907,7 @@ async function receiveShared() {
     await cache.delete(req);
   }
   history.replaceState(null, "", location.pathname);
-  if (files.length) addFiles(files);
+  if (files.length) { openAddPanel(); addFiles(files); }
 }
 
 // ---------- ドライブへの直リンク ----------
@@ -702,8 +953,12 @@ showDriveLinks();
 if (drive.hasLoggedIn()) {
   try { applyFolderIds(JSON.parse(localStorage.getItem("folderIds") || "{}")); } catch {}
   try { setAccounts(JSON.parse(localStorage.getItem("accounts") || "[]")); } catch {}
-  if (drive.isSignedIn()) safe(loadAccounts)();
   showListStatus();
+  showCachedDash();
+  // 通行証が有効なら、口座一覧 → ダッシュボードの順にドライブから最新にする
+  if (drive.isSignedIn()) safe(async () => { await loadAccounts(); await loadDash(); })();
+} else {
+  renderDash();
 }
 receiveShared();
 if (!drive.getClientId()) {
