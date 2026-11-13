@@ -586,9 +586,10 @@ async function checkForUpdate() {
     const text = await (await fetch(`version.js?t=${Date.now()}`, { cache: "no-store" })).text();
     const latest = text.match(/APP_VERSION\s*=\s*"([^"]+)"/)?.[1];
     if (!latest || latest === window.APP_VERSION) return;
-    // 同じバージョンへの読み込み直しは1回だけ（反映が遅れたときに何度も再読み込みしないように）
-    if (sessionStorage.getItem("reloadedFor") === latest) return;
-    sessionStorage.setItem("reloadedFor", latest);
+    // 読み込み直しても古いままだった場合（配信の反映待ち）は、1分あけてからもう一度試す
+    const last = JSON.parse(sessionStorage.getItem("reloadTry") || "{}");
+    if (last.v === latest && Date.now() - last.at < 60 * 1000) return;
+    sessionStorage.setItem("reloadTry", JSON.stringify({ v: latest, at: Date.now() }));
     $("#headerVersion").textContent = `v${latest} に更新中…`;
     await swReg?.update().catch(() => {});
     location.reload();

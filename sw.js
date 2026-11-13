@@ -11,7 +11,7 @@ const FILES = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(APP_CACHE).then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: "reload" })))));
+  e.waitUntil(caches.open(APP_CACHE).then((c) => Promise.all(FILES.map(async (f) => c.put(f, await fetch(f + "?_=" + Date.now(), { cache: "no-store" }))))));
   self.skipWaiting();
 });
 
@@ -46,7 +46,8 @@ self.addEventListener("fetch", (e) => {
   // 通信できればいつも最新（cache:"no-cache" でブラウザの古い保存を使わない）、
   // できなければ保存しておいた画面を表示。古いファイルと新しいファイルが混ざるのを防ぎます。
   e.respondWith(
-    fetch(e.request.url, { cache: "no-cache" })
+    // URLの後ろに毎回ちがう数字を付けて、途中のサーバー（GitHubの配信）に残った古いファイルも避ける
+    fetch(url.pathname + (url.search ? url.search + "&" : "?") + "_=" + Date.now(), { cache: "no-store" })
       .then((res) => {
         const copy = res.clone();
         caches.open(APP_CACHE).then((c) => c.put(e.request, copy));
