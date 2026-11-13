@@ -58,8 +58,12 @@ $("#authBtn").addEventListener("click", safe(async () => {
 async function requireLogin() {
   if (!drive.isSignedIn()) await drive.signIn();
   updateAuthBtn();
-  if (!accounts.length) await loadAccounts();
+  if (!accounts.length || listIsOld()) await loadAccounts();
 }
+
+// 端末に覚えている口座一覧が、今のバージョンより前に読み込んだものか
+// （アプリの更新で口座の種類が増えたとき、古い一覧のままにならないようにする）
+const listIsOld = () => localStorage.getItem("accountsVer") !== window.APP_VERSION;
 
 // ---------- 口座・カード ----------
 // 口座 = 「仕事で使用」フォルダの中のフォルダ。解約したものは名前の先頭に【解約】。
@@ -111,6 +115,8 @@ async function loadAccounts() {
     });
   }
   localStorage.setItem("accounts", JSON.stringify(list));
+  localStorage.setItem("accountsVer", window.APP_VERSION);
+  localStorage.setItem("accountsAt", String(Date.now()));
   setAccounts(list);
 }
 
@@ -136,6 +142,7 @@ function showAccounts() {
       `</optgroup>`).join("");
   showAccountLink();
   renderAccountList();
+  showListStatus();
 }
 
 // 明細ページのURL：フォルダの説明欄 → なければ config.js の LOGIN_LINKS
@@ -437,20 +444,53 @@ $("#showClosed").addEventListener("change", renderAccountList);
 
 function renderAccountList() {
   const show = $("#showClosed").checked;
-  const list = accounts.filter((a) => show || !a.closed);
-  $("#accountList").innerHTML = list.map((a) => `
+  showListStatus();
+  if (!accounts.length) return ($("#accountList").textContent = "ログインすると表示されます");
+  // リンク先は「どのサイトか」が分かるように、サイト名（ドメイン）を表示する
+  const urlText = (a) => {
+    const link = linkFor(a);
+    if (!link) return `<span class="warn">明細ページ：未設定（「URL」から入れられます）</span>`;
+    let host = link;
+    try { host = new URL(link).hostname; } catch {}
+    return `明細ページ：<a href="${esc(link)}" target="_blank" rel="noopener">${esc(host)}</a>${a.ownUrl ? "" : "（自動）"}`;
+  };
+  $("#accountList").innerHTML = CFG.ACCOUNT_GROUPS.map((g) => {
+    const list = accounts.filter((a) => a.group === g && (show || !a.closed));
+    return `<h3 class="group-head">${esc(g.label)}</h3>` + (list.length ? list.map((a) => `
     <div class="acct ${a.closed ? "closed" : ""}" data-id="${a.id}">
       <div>
         <span>${esc(a.name)}</span>
-        <small class="acct-url">${linkFor(a) ? `<a href="${esc(linkFor(a))}" target="_blank" rel="noopener">明細ページ</a>${a.ownUrl ? "" : "（自動）"}` : "URL未設定"}</small>
+        <small class="acct-url">${urlText(a)}</small>
       </div>
       <div class="acct-actions">
         <button class="btn small ghost" data-act="url">URL</button>
         ${a.closedByName ? `<small>名前で解約済み</small>`
           : `<button class="btn small ghost" data-act="${a.closed ? "reopen" : "close"}">${a.closed ? "戻す" : "解約"}</button>`}
       </div>
-    </div>`).join("");
+    </div>`).join("") : (listIsOld() || !g.folderId
+      ? `<p class="warn">まだ読み込めていません。上の「🔄 最新にする」を押してください。</p>`
+      : `<p class="muted">なし</p>`));
+  }).join("");
 }
+
+// 一覧をいつ読み込んだかを表示。古いときは目立たせる
+function showListStatus() {
+  const at = Number(localStorage.getItem("accountsAt") || 0);
+  const when = at ? new Date(at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  const old = drive.hasLoggedIn() && listIsOld();
+  document.querySelectorAll(".list-status").forEach((el) => {
+    el.textContent = !drive.hasLoggedIn() ? "" : old ? "⚠️ 一覧が古いです。「🔄 最新にする」を押してください" : `ドライブから読み込み：${when}`;
+    el.classList.toggle("warn", old);
+  });
+}
+
+// 「🔄 最新にする」：ドライブから口座一覧を読み込み直す
+document.querySelectorAll(".refresh-btn").forEach((b) => b.addEventListener("click", safe(async () => {
+  if (!drive.isSignedIn()) await drive.signIn();
+  updateAuthBtn();
+  await loadAccounts();
+  toast("口座一覧を最新にしました");
+})));
 
 // URL＝明細ページのURLを編集／解約・戻す＝見えない印を付け外し（フォルダ名や明細はそのまま）
 $("#accountList").addEventListener("click", safe(async (e) => {
@@ -554,6 +594,7 @@ if (drive.hasLoggedIn()) {
   try { applyFolderIds(JSON.parse(localStorage.getItem("folderIds") || "{}")); } catch {}
   try { setAccounts(JSON.parse(localStorage.getItem("accounts") || "[]")); } catch {}
   if (drive.isSignedIn()) safe(loadAccounts)();
+  showListStatus();
 }
 receiveShared();
 if (!drive.getClientId()) {

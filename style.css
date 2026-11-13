@@ -175,3 +175,5 @@ details.card input { margin: 12px 0 8px; }
 .acct .acct-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .topbar .ver { font-size: 11px; font-weight: 400; opacity: .75; margin-left: 4px; }
 .name-input { margin: 6px 0 0 !important; }
+.status-row { justify-content: space-between; margin: 8px 0 0; }
+.group-head { margin: 18px 0 2px !important; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 13px !important; }

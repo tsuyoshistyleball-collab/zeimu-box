@@ -31,6 +31,7 @@
     <section id="tab-upload" class="tab active">
       <div class="card">
         <select id="accountSelect"><option value="">ログインしてください</option></select>
+        <div class="row status-row"><small class="list-status muted"></small><button type="button" class="btn small ghost refresh-btn">🔄 最新にする</button></div>
         <div id="accountLink"></div>
         <label class="drop" id="dropZone">
           <input type="file" id="fileInput" multiple accept=".csv,.pdf,.txt,.xlsx,.xls,image/*" />
@@ -54,7 +55,9 @@
     <!-- 設定 -->
     <section id="tab-settings" class="tab">
       <div class="card">
-        <h2>口座・カード</h2>
+        <h2>口座・カード・売上振込</h2>
+        <p class="muted">Googleドライブのフォルダから読み込んだ一覧です。「URL」で明細ページのリンクを変えられます。</p>
+        <div class="row status-row"><small class="list-status muted"></small><button type="button" class="btn small ghost refresh-btn">🔄 最新にする</button></div>
         <div id="accountList" class="muted">ログインすると表示されます</div>
         <label class="row muted"><input type="checkbox" id="showClosed" /> 解約済みも表示</label>
         <form id="addForm">
