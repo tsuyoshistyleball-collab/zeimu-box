@@ -39,6 +39,29 @@ document.querySelectorAll(".tabbar button").forEach((b) =>
   })
 );
 
+// ---------- スワイプでタブを移動（スマホ） ----------
+// 指を左へ動かすと右のタブ、右へ動かすと左のタブへ。
+// 横に長い表（スクロールできる所）や、入力中の欄の上では、その操作を優先して何もしない。
+let swipeStart = null;
+document.addEventListener("touchstart", (e) => {
+  const t = e.touches[0];
+  const scroller = e.target.closest(".scroll");
+  // 入力中の欄（カーソルが入っている欄）の上では、文字の操作を優先する
+  const blocked = e.touches.length > 1 || e.target === document.activeElement && e.target.matches("input, select, textarea") ||
+    (scroller && scroller.scrollWidth > scroller.clientWidth);
+  swipeStart = blocked ? null : { x: t.clientX, y: t.clientY };
+}, { passive: true });
+document.addEventListener("touchend", (e) => {
+  if (!swipeStart) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - swipeStart.x, dy = t.clientY - swipeStart.y;
+  swipeStart = null;
+  if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 2) return; // 短い動き・縦の動きは無視
+  const tabs = [...document.querySelectorAll(".tabbar button")];
+  const next = tabs[tabs.findIndex((b) => b.classList.contains("active")) + (dx < 0 ? 1 : -1)];
+  if (next) { next.click(); window.scrollTo(0, 0); }
+}, { passive: true });
+
 // ---------- ログイン ----------
 const updateAuthBtn = () => ($("#authBtn").textContent = drive.hasLoggedIn() ? "ログアウト" : "ログイン");
 
